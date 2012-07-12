@@ -1,5 +1,5 @@
 all:
-	gcc -Wall cqgreylist.c -o cqgreylist
+	gcc -Wall -Wextra -pedantic cqgreylist.c -o cqgreylist
 	strip cqgreylist
 
 dev:
