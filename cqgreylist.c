@@ -46,10 +46,11 @@
 #define TIMEOUT	300
 /* specify the greylisting time in which to not accept mail from a sender */
 #define GREY_SECONDS	60
+#define UNUSED(x) (void)(x)
 
-char* hostname = "your.fqdn.com";
-char* message  = "you are greylisted try again";
-char* base_directory = "/var/qmail/cqgreylist/";
+static const char* hostname = "your.fqdn.com";
+static const char* message  = "you are greylisted try again";
+static const char* base_directory = "/var/qmail/cqgreylist/";
 /*
  * End of user editable parameters
  */
@@ -65,7 +66,7 @@ char* base_directory = "/var/qmail/cqgreylist/";
 void	first_octet( char* ip, char** octet );
 int		is_greylisted( char* ip );
 int		is_backtoosoon( char* ip );
-void	negotiate_and_reject( char* message );
+void	negotiate_and_reject( const char* message );
 void	hand_to_smtpd( char* smtpd_line );
 void	create_file( char* ip );
 void	clean_exit( int retval );
@@ -83,6 +84,9 @@ int
 main( int argc, char* argv[] ){
 
 	char* remote_ip 	= NULL;
+	char* relay_client	= NULL;
+	char* whitelisted	= NULL;
+
 	/* get the environment variables */
 	remote_ip	= getenv( "TCPREMOTEIP" );
 
@@ -96,9 +100,6 @@ main( int argc, char* argv[] ){
 	}
 
 	parse_args( argc, argv, &smtpd_line );
-
-	char* relay_client	= NULL;
-	char* whitelisted	= NULL;
 
 	relay_client = getenv("RELAYCLIENT");
 	whitelisted  = getenv("WHITELISTED");
@@ -132,21 +133,22 @@ main( int argc, char* argv[] ){
 int
 is_greylisted( char* ip ){
 
-	char* octet		= NULL;
+	char 	*octet		= NULL;
 	int   retval	= FALSE;
-
+	char 	*dir_name = NULL;
+	int 	dir_name_size = 0;
+	DIR 	*dir_handler = NULL;
+	
 	first_octet( ip, &octet );
 	
 	/* check to see if a directory exists */
-	char *dir_name = NULL;
-	int dir_name_size = strlen(base_directory) + strlen(octet);
+	dir_name_size = strlen(base_directory) + strlen(octet);
 	dir_name = malloc ((dir_name_size + 1) * sizeof(char));
 	memset (dir_name, 0x0, dir_name_size + 1);
 	strcat (dir_name, base_directory);
 	strncat (dir_name, octet, dir_name_size - strlen(base_directory) );
 	strcat (dir_name, "\0");
 
-	DIR* dir_handler = NULL;
 
 	dir_handler = opendir( dir_name );
 	if( dir_handler == NULL ){
@@ -176,12 +178,14 @@ is_greylisted( char* ip ){
 
 /* if its still FALSE then an error happened up and we don't need to check for a file */
 	if( retval != FALSE ){
+		char* file_name	= NULL;
+		int file_name_size = 0;
+
 		/* check if the file exists */
 		struct stat file_stat;
 		memset( &file_stat, 0, sizeof(file_stat) );
 
-		char* file_name	= NULL;
-		int file_name_size = dir_name_size + 1 /*"/"*/ + strlen(ip);
+		file_name_size = dir_name_size + 1 /*"/"*/ + strlen(ip);
 		file_name = malloc ((file_name_size + 1) * sizeof(char));
 		memset (file_name, 0x0, file_name_size + 1);
 		strcat (file_name, dir_name);
@@ -215,19 +219,20 @@ is_greylisted( char* ip ){
 int
 is_backtoosoon( char* ip ){
 
-	char*	octet	= NULL;
-	int		retval	= TRUE;
-	
+	char 				*octet	= NULL;
+	int					retval	= TRUE;
+	int 				dir_name_size = 0;
+	int 				file_name_size = 0;
+	char 				*file_name	= NULL;
+	struct stat file_stat;
 
 	first_octet( ip, &octet );
 
 	/* check if the file exists */
-	struct stat file_stat;
 	memset( &file_stat, 0, sizeof(file_stat) );
-	int dir_name_size = strlen(base_directory) + strlen(octet);
-	int file_name_size = dir_name_size + 1 /*"/"*/ + strlen(ip);
+	dir_name_size = strlen(base_directory) + strlen(octet);
+	file_name_size = dir_name_size + 1 /*"/"*/ + strlen(ip);
 
-	char* file_name	= NULL;
 	file_name = malloc ((file_name_size + 1) * sizeof(char));
 	memset (file_name, 0x0, file_name_size + 1);
 	strcat (file_name, base_directory);
@@ -286,20 +291,13 @@ parse_args( int argc, char* argv[], char** line ){
 
 
 void
-negotiate_and_reject( char* message ){
-
-#ifdef DEBUG
-	fprintf( stderr, "starting negotiation, " );
-#endif
-
-	/* set the timeout signal handler */
-	signal( SIGALRM, timeout );
+negotiate_and_reject( const char* message ){
 
 	typedef struct
 	{
 		char name[5];
 		char response[64];
-	}command;
+	} command;
 
 	command commands[11] =
 	{
@@ -315,6 +313,16 @@ negotiate_and_reject( char* message ){
 		{	"NOOP" , "250 noop\r\n"},
 		{	"QUIT" , ""}
 	};
+
+	int break_loop	= FALSE;
+	int matched		= FALSE;
+
+#ifdef DEBUG
+	fprintf( stderr, "starting negotiation, " );
+#endif
+
+	/* set the timeout signal handler */
+	signal( SIGALRM, timeout );
 
 	snprintf( commands[0].response, sizeof(commands[0].response), "250 %s\r\n", hostname );
 	commands[0].response[sizeof(commands[0].response)-1] = 0;
@@ -338,11 +346,9 @@ negotiate_and_reject( char* message ){
 	printf( "220 %s cqgreylist - reconnect later\r\n", hostname );
 	fflush( NULL );
 
-	int break_loop	= FALSE;
-	int matched		= FALSE;
-
 	alarm( TIMEOUT );		/* send us an alarm after the time specified */
 	while( (fgets( buffer, BUFFER_SIZE, stdin ) != NULL) && break_loop != TRUE ){
+		int i = 0;
 		alarm( 0 );	
 	
 		matched = FALSE;
@@ -358,7 +364,6 @@ negotiate_and_reject( char* message ){
 			break;
 		}
 
-		int i = 0;
 		for( i=0; i<10 && matched == FALSE; i++){
 			if( strncasecmp( cmd, commands[i].name, sizeof(cmd) ) == 0 ){
 				printf( "%s", commands[i].response );
@@ -405,14 +410,17 @@ hand_to_smtpd( char* smtpd_line ){
 void
 create_file( char* ip ){
 
-	char*	octet	= NULL;
+	char 	*octet	= NULL;
+	int  	dir_name_size = 0;
+	int  	file_name_size = 0;
+	char 	*file_name	= NULL;
+	FILE 	*fh = NULL;
 	
 	first_octet( ip, &octet );
 
-	int dir_name_size = strlen(base_directory) + strlen(octet);
-	int file_name_size = dir_name_size + 1 /*"/"*/ + strlen(ip);
+	dir_name_size = strlen(base_directory) + strlen(octet);
+	file_name_size = dir_name_size + 1 /*"/"*/ + strlen(ip);
 
-	char* file_name	= NULL;
 	file_name = malloc ((file_name_size + 1) * sizeof(char));
 	memset (file_name, 0x0, file_name_size + 1);
 	strcat (file_name, base_directory);
@@ -421,7 +429,6 @@ create_file( char* ip ){
 	strncat (file_name, ip, file_name_size - dir_name_size - 1 );
 	strcat (file_name, "\0");
 
-	FILE* fh = NULL;
 
 	fh = fopen( file_name, "w" );
 	if( fh == NULL ){
@@ -456,7 +463,7 @@ first_octet( char* ip, char** pointer ){
 	sprintf( *pointer, "%d", 0x000000FF & bin_ip.s_addr );
 
 	/* just to make sure we don't overflow */
-	//pointer[3] = 0;
+	/*pointer[3] = 0;*/
 
 	return;
 }
@@ -472,6 +479,7 @@ clean_exit( int retval ){
 
 void
 timeout( int sig_num ){
+	UNUSED(sig_num);
 
 	printf( "421 %s timeout\r\n", hostname );
 
