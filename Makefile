@@ -1,5 +1,5 @@
 all:
-	gcc -Wall -Wextra -ansi -Wno-implicit-function-declaration -pedantic cqgreylist.c -o cqgreylist
+	gcc -Wall -Wextra -pedantic cqgreylist.c -o cqgreylist
 	strip cqgreylist
 
 dev:
